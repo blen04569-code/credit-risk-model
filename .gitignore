@@ -1,1 +1,4 @@
 data/
+# Add common python cache extensions to gitignore
+echo "__pycache__/" >> .gitignore
+echo "*.pyc" >> .gitignore

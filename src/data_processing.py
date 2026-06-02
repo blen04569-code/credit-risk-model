@@ -134,3 +134,75 @@ def build_production_pipeline(numerical_cols, categorical_cols, woe_cols):
 
 if __name__ == "__main__":
     print("Pipeline compilation successful. Ready to run downstream processing routines.")
+
+from sklearn.cluster import KMeans
+
+def generate_proxy_target_variable(df, n_clusters=3, random_state=42):
+    """
+    Engineers an RFM-driven behavioral proxy target variable ('is_high_risk').
+    Identifies the least engaged customer segment using K-Means clustering.
+    """
+    print("\n📊 Beginning RFM Proxy Target Variable Engineering...")
+    df_rfm = df.copy()
+    
+    # Ensure correct column formats
+    if 'TransactionStartTime' in df_rfm.columns:
+        df_rfm['TransactionStartTime'] = pd.to_datetime(df_rfm['TransactionStartTime'])
+    else:
+        raise ValueError("Missing 'TransactionStartTime' column required for Recency calculations.")
+        
+    # 1. Establish reference snapshot date (1 day after the latest recorded transaction)
+    snapshot_date = df_rfm['TransactionStartTime'].max() + pd.Timedelta(days=1)
+    
+    # 2. Extract Recency, Frequency, and Monetary (RFM) metrics per customer
+    print("⏳ Aggregating structural RFM metrics per customer matrix...")
+    rfm_table = df_rfm.groupby('CustomerId').agg({
+        'TransactionStartTime': lambda x: (snapshot_date - x.max()).days, # Recency
+        'TransactionId': 'count',                                         # Frequency
+        'Amount': 'sum'                                                   # Monetary Value
+    }).reset_index()
+    
+    rfm_table.columns = ['CustomerId', 'Recency', 'Frequency', 'Monetary']
+    
+    # 3. Pre-process and scale RFM features for balanced K-Means distance calculations
+    scaler = StandardScaler()
+    scaled_rfm = scaler.fit_transform(rfm_table[['Recency', 'Frequency', 'Monetary']])
+    
+    # 4. Execute K-Means Clustering
+    print(f"🤖 Fitting K-Means clustering profiles (Clusters={n_clusters})...")
+    kmeans = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
+    rfm_table['Cluster'] = kmeans.fit_predict(scaled_rfm)
+    
+    # 5. Programmatically identify the "High-Risk" cluster (Lowest Frequency + Lowest Monetary)
+    # Calculate average characteristics per cluster
+    cluster_profiles = rfm_table.groupby('Cluster').agg({
+        'Recency': 'mean',
+        'Frequency': 'mean',
+        'Monetary': 'mean'
+    }).reset_index()
+    
+    print("\n--- Extracted Cluster Behavioral Profiles ---")
+    print(cluster_profiles.to_string(index=False))
+    
+    # High risk is typically characterized by low frequency and low monetary value.
+    # We rank clusters by combining low frequency and low monetary ranks.
+    cluster_profiles['Risk_Score'] = (
+        cluster_profiles['Frequency'].rank(ascending=True) + 
+        cluster_profiles['Monetary'].rank(ascending=True)
+    )
+    
+    high_risk_cluster = cluster_profiles.sort_values(by='Risk_Score').iloc[0]['Cluster']
+    print(f"\n🎯 Programmatically identified Cluster {int(high_risk_cluster)} as the High-Risk/Disengaged Proxy.")
+    
+    # 6. Map binary label back to the customer profile (1 = High Risk, 0 = Active/Low Risk)
+    rfm_table['is_high_risk'] = (rfm_table['Cluster'] == high_risk_cluster).astype(int)
+    
+    # 7. Merge the new proxy target target column back into your main processed dataset
+    target_mapping = rfm_table[['CustomerId', 'is_high_risk']]
+    final_df = pd.merge(df, target_mapping, on='CustomerId', how='left')
+    
+    # Handle edge case defaults for unmapped entities if any exist
+    final_df['is_high_risk'] = final_df['is_high_risk'].fillna(0).astype(int)
+    
+    print(f"✅ Target integration successful. High-risk instances labeled: {final_df['is_high_risk'].sum()} out of {len(final_df)} rows.")
+    return final_df

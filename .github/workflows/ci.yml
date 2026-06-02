@@ -1,0 +1,37 @@
+name: Bati Bank Credit Scoring System CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  continuous-integration-test-suite:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code Repository State
+      uses: actions/checkout@v4
+
+    - name: Set Up Python Runtime Environment
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Install Runtime Core and Testing Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 pytest pandas numpy scikit-learn xgboost mlflow fastapi uvicorn pydantic
+
+    - name: Execute Code Style Linter Routine (flake8)
+      run: |
+        # Stop build execution steps if syntactic structural errors or code style patterns fail limits
+        # max-line-length override configured to accommodate verbose machine learning documentation tags
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: Execute Component Unit Testing Suite (pytest)
+      run: |
+        pytest
